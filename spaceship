@@ -1,0 +1,185 @@
+import numpy as np 
+import pandas as pd
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import train_test_split,cross_validate,StratifiedKFold,cross_val_score
+from xgboost import XGBClassifier
+from fastai.tabular.all import *
+
+
+#import the dataset
+df_train =pd.read_csv('train.csv')
+df_test =pd.read_csv('test.csv')
+
+
+#if null then make them 0 as they spend nothing 
+
+
+def fill_billed_with_zero(df):
+    df['RoomService'] =df.RoomService.fillna(0)
+    df['FoodCourt'] =df.FoodCourt.fillna(0)
+    df['ShoppingMall'] =df.ShoppingMall.fillna(0)
+    df['Spa'] =df.Spa.fillna(0)
+    df['VRDeck']=df.VRDeck.fillna(0)
+    
+fill_billed_with_zero(df_train)
+fill_billed_with_zero(df_test)
+
+
+#the spends can vary massively so long them to stop them empowering the mode
+
+def log_service_charges(df):
+    df['RoomService'] =np.log(df.RoomService,out =np.zeros_like(df.RoomService),where =(df.RoomService!= 0))
+    df['FoodCourt'] =np.log(df.FoodCourt,out =np.zeros_like(df.FoodCourt),where =(df.FoodCourt!= 0))
+    df['ShoppingMall'] =np.log(df.ShoppingMall,out =np.zeros_like(df.ShoppingMall),where =(df.ShoppingMall!= 0))
+    df['Spa'] =np.log(df.Spa,out =np.zeros_like(df.Spa),where =(df.Spa!= 0))
+    df['VRDeck'] =np.log(df.VRDeck,out =np.zeros_like(df.VRDeck),where =(df.VRDeck!= 0))
+    
+    
+log_service_charges(df_train)
+log_service_charges(df_train)
+
+
+#if not truw for VIP &CyriSleep then Default to a none VIP and CryoSleep 
+
+def fill_vip_and_cryo_with_false(df):
+    df['VIP'] =df.VIP.fillna(False)
+    df['CyroSleep'] =df.CryoSleep.fillna(False)
+    
+fill_vip_and_cryo_with_false(df_train)
+fill_vip_and_cryo_with_false(df_train)
+
+
+#to fill in the missing ages then we should look for a suitable grouping for median(rather than just default a median of everything )
+
+df_corr = df_train.corr().abs().unstack().sort_values(kind ='quicsort',ascending =False).reset_index()
+df_corr.rename(columns ={'level_0': "Feature_1",'Level_1': "Feature 2",0: 'Correlation Coefficent'},inplace =True)
+df_corr[df_corr['Feature_1']=='Age']
+
+
+#no correlation so default age to median 
+
+def fill_age_with_median(df):
+    df['Age'] =df.Age.fillna(df.Age.median())
+    
+fill_age_with_median(df_train)
+fill_age_with_median(df_test)
+
+# if it is not known then that tells us something, so best to fill with an 'Unkonown value 
+
+def fill_hp_cabin_with_unknown(df):
+    df['HomePlanet'] = df.HomePlanet.fillna('Unknown')
+    df['Cabin'] = df.Cabin.fillna('Unknown')
+    df['Destination'] = df.Destination.fillna('Unknown')
+
+fill_hp_cabin_with_unknown(df_train)
+fill_hp_cabin_with_unknown(df_test)
+
+#create the croup Id column 
+
+def create_group_id(df):
+    df['GroupId'] =df.PassengerId.apply(lambda s: s[:4])
+    
+create_group_id(df_train)
+create_group_id(df_test)
+
+
+#create the deck column 
+
+def create_deck(df):
+    df['Deck'] = df.Cabin.apply(lambda s: s[:1])
+    
+create_deck(df_train)
+create_deck(df_test)
+
+#create the side column (unknown will get the value N so they are together still )
+
+
+def create_side(df):
+    df['Side'] =df.Cabin.apply(lambda s: s[-1])
+    
+create_side(df_train)
+create_side(df_test)
+
+#split into surname and first name 
+
+def create_surname_and_firstname(df):
+    df['Name'] = df.Name.fillna("Unknown Unknown ")
+    splitName = df.Name.str.split(" ", n=1,expand =True)
+    df['FirstName'] =splitName[0]
+    df['Surname'] =splitName[1]
+    df.drop(columns = ["Name"],inplace =True)
+    
+    
+create_surname_and_firstname(df_train)
+create_surname_and_firstname(df_test)
+
+#create a group size column 
+
+all_df = pd.concat([df_train.GroupId, df_test.GroupId])
+
+
+def create_group_size(df):
+    df['GroupSize'] = df.GroupId.map(lambda x: all_df.value_counts()[x])
+
+create_group_size(df_train)
+create_group_size(df_test)
+
+#create a feature for those who are solo bool 
+def create_solo(df):
+    df['Solo'] = df.GroupSize.apply(lambda gs:gs ==1)
+create_solo(df_train)
+create_solo(df_test)
+
+def spent_money(df):
+    df['SpentMoney'] =(df.RoomService +df.FoodCourt +df.ShoppingMall +df.Spa +df.VRDeck)>0
+    
+spent_money(df_train)
+spent_money(df_test)
+
+
+# VIP removed as later on (and then iterated back to this, VIP has 0 correlation)
+cat_names = ['CryoSleep', 'GroupId', 'Deck', 'FirstName', 'Surname', 'Side', 'Destination', 'HomePlanet', 'Solo', 'SpentMoney']
+cont_names = ['Age', 'RoomService', 'FoodCourt', 'ShoppingMall', 'Spa', 'VRDeck', 'GroupSize']
+
+
+dls = TabularDataLoaders.from_df(df_train, y_names="Transported", y_block = CategoryBlock(),
+    cat_names = cat_names,
+    cont_names = cont_names,
+    procs = [Categorify, Normalize])
+
+
+#get the dat out of fastai 
+X_train, y_train = dls.train.xs, dls.train.ys.values.ravel()
+X_test, y_test = dls.valid.xs, dls.valid.ys.values.ravel()
+
+forest_model = RandomForestClassifier(n_jobs =-1,random_state =666,n_estimators =200,verbose =1)
+
+forest_model.fit(X_train,y_train)
+
+
+
+#validate on test set
+scores = cross_validate(forest_model,X_test,y_test,cv =5,scoring =('accuracy'))
+scores['test_score'].mean()
+
+
+dls_test = TabularDataLoaders.from_df(df_test,
+    cat_names = cat_names,
+    cont_names = cont_names,
+    valid_idx = [],
+    procs = [Categorify, Normalize])
+
+X_train_test, _ = dls_test.train.xs, dls_test.train.ys.values.ravel()
+
+#predictions
+y_pred =forest_model.predict(X_train_test)
+
+
+
+
+
+#submission file 
+df_test['Transported'] =y_pred ==1
+sub_df =df_test[['PassengerId','Transported']]
+sub_df.to_csv('submission.csv',index =False)
